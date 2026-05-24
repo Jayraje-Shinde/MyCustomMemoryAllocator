@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 typedef struct Block {
@@ -125,10 +126,51 @@ void *myMalloc(size_t size) {
   return (void *)((char *)newBlock + sizeof(Block));
 }
 
+void myFree(void *toFree) {
+  if (toFree == NULL || toFree < globHead->heapStart ||
+      toFree > globHead->heapEnd)
+    return;
+
+  Block *toFreeBlock = (void *)((char *)toFree - sizeof(Block));
+
+  if (toFreeBlock->isFree == true)
+    return;
+
+  if (toFreeBlock == NULL)
+    return;
+
+  toFreeBlock->isFree = true;
+}
+
+void printHeap() {
+  printf("GloabalHeader [No of Pages : %d]\n", globHead->pages);
+
+  Block *tempblock = globHead->startBlock;
+  int count = 1;
+  while (tempblock != NULL) {
+    if (tempblock->isFree == true) {
+      printf("[Prev : %p] -> [Block %d : %p] -> [FREE] - [size : %zu] -> "
+             "[Next : %p]\n",
+             tempblock->prev, count++, tempblock, tempblock->size,
+             tempblock->next);
+    } else {
+      printf("[Prev : %p] -> [Block %d : %p] -> [USED] - [size : %zu] -> "
+             "[Next : %p]\n",
+             tempblock->prev, count++, tempblock, tempblock->size,
+             tempblock->next);
+    }
+
+    tempblock = tempblock->next;
+  }
+}
+
 int main() {
-  int *b = myMalloc(10000);
   int *a = myMalloc(100);
-  printf("%p\n%p", b, a);
+  int *b = myMalloc(50);
+  char *h = myMalloc(100000);
+  myFree(b);
+  printHeap();
+
   printf("\nCustom Malloc By Jayraje Shinde");
   return 0;
 }
