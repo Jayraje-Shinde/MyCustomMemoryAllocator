@@ -175,4 +175,4 @@ int main() {
   return 0;
 }
 
-// Todo update the first fit to best fit and after that also add block spliting
+// Create block mering function and done
