@@ -27,6 +27,36 @@ typedef struct GloabalHeader {
 
 const int PAGE_SIZE = 4096;
 static GloabalHeader *globHead = NULL;
+const int blockSplitLimit = 256;
+
+bool isSplitable(Block *bestBlock, size_t size) {
+  size_t neededSpace = sizeof(Block) + size;
+  size_t remainingSpace = bestBlock->size - neededSpace;
+
+  return remainingSpace > blockSplitLimit;
+}
+
+void *SplitBlock(Block *blockToSplit, size_t size) {
+  blockToSplit->isFree = false;
+  int spaceRemainigAfterSplit = blockToSplit->size - size - sizeof(Block);
+  blockToSplit->size = size;
+
+  Block *newBlock = (void *)((char *)blockToSplit + sizeof(Block) + size);
+
+  if (globHead->tailBlock == blockToSplit) {
+    globHead->tailBlock = newBlock;
+    newBlock->next = NULL;
+  } else {
+    newBlock->next = blockToSplit->next;
+    blockToSplit->next->prev = newBlock;
+  }
+  newBlock->prev = blockToSplit;
+  blockToSplit->next = newBlock;
+  newBlock->size = spaceRemainigAfterSplit;
+  newBlock->isFree = true;
+
+  return (void *)((char *)blockToSplit + sizeof(Block));
+}
 
 void *myMalloc(size_t size) {
   int noOfPagesToGrow = ((size + sizeof(Block)) % PAGE_SIZE) == 0
@@ -54,17 +84,25 @@ void *myMalloc(size_t size) {
   Block *tempblock =
       (Block *)((char *)globHead->heapStart + sizeof(GloabalHeader));
 
+  Block *bestBlock = NULL;
   while (tempblock != NULL) {
-    if (tempblock->isFree == true && tempblock->size >= size) {
-      tempblock->isFree = false;
-      return (void *)((char *)tempblock + sizeof(Block));
+    if ((tempblock->isFree == true) && (tempblock->size >= size) &&
+        (bestBlock != NULL ? tempblock->size < bestBlock->size : true)) {
+      bestBlock = tempblock;
     }
-
-    if (tempblock->next == NULL)
-      break;
     tempblock = tempblock->next;
   }
 
+  if (bestBlock != NULL && bestBlock->isFree != false) {
+    bool canBlockSplit = isSplitable(bestBlock, size);
+    if (canBlockSplit) {
+      return SplitBlock(bestBlock, size);
+    } else {
+      bestBlock->isFree = false;
+      return (void *)((char *)bestBlock + sizeof(Block));
+    }
+  }
+  tempblock = globHead->tailBlock;
   void *currentBlockEnd =
       (void *)((char *)tempblock + tempblock->size + sizeof(Block));
   void *newBlockEnd = (void *)((char *)currentBlockEnd + sizeof(Block) + size);
@@ -90,7 +128,7 @@ void *myMalloc(size_t size) {
 int main() {
   int *b = myMalloc(10000);
   int *a = myMalloc(100);
-  printf("%p", a);
+  printf("%p\n%p", b, a);
   printf("\nCustom Malloc By Jayraje Shinde");
   return 0;
 }
