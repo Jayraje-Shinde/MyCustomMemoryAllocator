@@ -9,6 +9,12 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+//	Below is the Data structure for the memory block and the heap manager.
+// The heap manager will keep track of the start and end of the heap, 
+//	the number of pages allocated, and the linked list of memory blocks. 
+//	Each memory block will have its size, a flag to indicate if it's free or not, 
+//	and pointers to the next and previous blocks in the list. 
+
 typedef struct MemoryBlock {
   size_t size;
   bool isFree;
@@ -24,10 +30,23 @@ typedef struct HeapManager {
   int pages;
 } HeapManager;
 
-const int PAGE_SIZE = 4096;
-static HeapManager *globHead = NULL;
-const int blockSplitLimit = 256;
 
+const int PAGE_SIZE = 4096; //This constant defines the size of memory page which is 4096 byte (4KB).
+//Now generally there are rarly diffrent page sizes for example we can see 16KB page size in IOS.
+
+
+// Static keyword below helps us to maintain the state of our global header metadata variable to live
+// until the program ends and also keeps it private that is it can only be accessed within this file.
+static HeapManager *globHead = NULL; 
+
+
+const int blockSplitLimit = 256; // This constant defines the minimum size available for a block that can be split.
+
+
+//Below is the function that checks if a given memory block is able to split by check the size of the block
+//which is given input to the function with the size we want to allocate and the size of the metadata for 
+//the new block that will be created after split if the remaining space is greater than the blockSplitLimit 
+//then we can split the block and use the remaining space for future allocations.
 bool isSplitable(MemoryBlock *bestFitBlock, size_t size) {
   size_t neededSpace = sizeof(MemoryBlock) + size;
   size_t remainingSpace = bestFitBlock->size - neededSpace;
@@ -35,6 +54,13 @@ bool isSplitable(MemoryBlock *bestFitBlock, size_t size) {
   return remainingSpace > blockSplitLimit;
 }
 
+
+// Now once we have for the condition of spliting the block , below is the function that will perform the actual splitting
+// of the block. It will mark the original block as used becuase we will be giving it to the user after succesfully 
+//updating the size meta data variable of the block the remaining space will be given to a new block that w ewill create 
+//and hence we get a new block 
+// example we need 100 bytes and the block we got is 500 bytes so this block is eligible for splitting
+//so we will split this block into 100 bytes block and the remainig 400 will be used by the blockmetadata + actual free space.
 void *SplitMemoryBlock(MemoryBlock *blockToSplit, size_t size) {
   blockToSplit->isFree = false;
   int spaceRemainigAfterSplit = blockToSplit->size - size - sizeof(MemoryBlock);
@@ -58,6 +84,20 @@ void *SplitMemoryBlock(MemoryBlock *blockToSplit, size_t size) {
   return (void *)((char *)blockToSplit + sizeof(MemoryBlock));
 }
 
+
+//Now finally one of the core function our memory allocator 
+//This is not at all even close to the real malloc implementation of the C library
+// but this function got everything that a core allocator should have 
+//Now coming to the implementation of this function :
+// It checks for pages needed that is how much size is needed to be allocated
+// once we have that we check if out global header is initialised or not if not then we create our first block
+// once out global header is set after that whenever we need to allocate memory we travese through our blocks
+// starting from starting block and after that we check for the best fit block that is the block that is enough as well as 
+//smallest among eligible blocks if we find such block we check for spliting if possible split and return the address 
+//if we cant split we return that whole block to the user and mark it as used
+// finally if our global header is initialised that is first block exists and we dont have any eligible block 
+//then we create a new block at the end of the heap and return that to user and update our global header tail hence having the integrity of the list 
+//Note : our MemoryAllocator return user the address just after the block metadata is over
 void *AllocateMemory(size_t size) {
   int pagesNeeded = ((size + sizeof(MemoryBlock)) % PAGE_SIZE) == 0
                         ? ((size + sizeof(MemoryBlock)) / PAGE_SIZE)
@@ -125,6 +165,9 @@ void *AllocateMemory(size_t size) {
   return (void *)((char *)newBlock + sizeof(MemoryBlock));
 }
 
+
+//Below is a healper function that helps us identify if adjacent blocks to the block we want to free are free or not this is important because if they are free then we can merge them together and create a bigger block which will 
+//help us to reduce fragmentation in our heap and also will help us to reuse the memory more efficiently.
 bool CanCoalease(MemoryBlock *BlockToCheck) {
   if (BlockToCheck->next != NULL && BlockToCheck->next->isFree == true)
     return true;
@@ -135,6 +178,12 @@ bool CanCoalease(MemoryBlock *BlockToCheck) {
   return false;
 }
 
+
+//Once our CanCoalease function identifies that we can merge the adjacent blocks then this function will perform the actual merging of the blocks it will keep merging the adjacent free blocks until we hit a used block and
+//hence we will get a bigger block with more free space which can be used for future allocations.
+//How the coalease function works is simple we first marks our block free then we update the block to the left most free block that is the block that is previos and is free 
+//once we get to the previous most free block we then loop forward and merge block removing the meta data and adding size + sizeof(block) to our block creating bigger block
+//Edge cases in this are the head block and tail block handled carefully
 void CoaleaseAdjacentBlocks(MemoryBlock *blockToMerge) {
   blockToMerge->isFree = true;
   while (blockToMerge != globHead->startBlock &&
@@ -161,6 +210,15 @@ void CoaleaseAdjacentBlocks(MemoryBlock *blockToMerge) {
   }
 }
 
+
+//Now the next main core function of memory allocator which is Freeing the memory using freememory In c library we know this by the name of free()
+//Now how this works so firsly this checks if the address is valid in our heap boundary and reveser calculates the adress as our memory allocator doesnt return block start adress
+//it returns the address just after the block metadata so we need to reverse calculate the block start address by subtracting the size of the 
+//metadata from the given address once we have that we check if this block is already free
+//or not if its already free then we just return as this is a double free case and we dont want 
+//to mess with our heap in that case
+//Now after all the edge cases and safety cases we simple check for coaleasing if possible as we saw in above
+//function then we can easily proceed to coalease using the function or else if not possible we simply mark the block as free
 void FreeMemory(void *toFree) {
   if (toFree == NULL || toFree < globHead->heapStart ||
       toFree > globHead->heapEnd)
@@ -168,11 +226,12 @@ void FreeMemory(void *toFree) {
 
   MemoryBlock *toFreeBlock = (void *)((char *)toFree - sizeof(MemoryBlock));
 
+  if (toFreeBlock == NULL)
+	 return;
+	 
   if (toFreeBlock->isFree == true)
     return;
 
-  if (toFreeBlock == NULL)
-    return;
 
   if (CanCoalease(toFreeBlock)) {
     CoaleaseAdjacentBlocks(toFreeBlock);
@@ -181,7 +240,9 @@ void FreeMemory(void *toFree) {
   }
 }
 
-void printHeap() {
+
+
+void printHeap() { // as the name suggest this function prints the blocks and there metadata and addresses for debugging purpose
   printf("HeapManager [No of Pages : %d]\n", globHead->pages);
 
   MemoryBlock *tempblock = globHead->startBlock;
@@ -202,6 +263,7 @@ void printHeap() {
     tempblock = tempblock->next;
   }
 }
+
 
 int main() {
 
