@@ -3,46 +3,45 @@
  */
 
 #include <assert.h>
-#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
 
-typedef struct Block {
+typedef struct MemoryBlock {
   size_t size;
   bool isFree;
-  struct Block *next;
-  struct Block *prev;
-} Block;
+  struct MemoryBlock *next;
+  struct MemoryBlock *prev;
+} MemoryBlock;
 
-typedef struct GloabalHeader {
+typedef struct HeapManager {
   void *heapStart;
   void *heapEnd;
-  struct Block *startBlock;
-  struct Block *tailBlock;
+  struct MemoryBlock *startBlock;
+  struct MemoryBlock *tailBlock;
   int pages;
-} GloabalHeader;
+} HeapManager;
 
 const int PAGE_SIZE = 4096;
-static GloabalHeader *globHead = NULL;
+static HeapManager *globHead = NULL;
 const int blockSplitLimit = 256;
 
-bool isSplitable(Block *bestBlock, size_t size) {
-  size_t neededSpace = sizeof(Block) + size;
-  size_t remainingSpace = bestBlock->size - neededSpace;
+bool isSplitable(MemoryBlock *bestFitBlock, size_t size) {
+  size_t neededSpace = sizeof(MemoryBlock) + size;
+  size_t remainingSpace = bestFitBlock->size - neededSpace;
 
   return remainingSpace > blockSplitLimit;
 }
 
-void *SplitBlock(Block *blockToSplit, size_t size) {
+void *SplitMemoryBlock(MemoryBlock *blockToSplit, size_t size) {
   blockToSplit->isFree = false;
-  int spaceRemainigAfterSplit = blockToSplit->size - size - sizeof(Block);
+  int spaceRemainigAfterSplit = blockToSplit->size - size - sizeof(MemoryBlock);
   blockToSplit->size = size;
 
-  Block *newBlock = (void *)((char *)blockToSplit + sizeof(Block) + size);
+  MemoryBlock *newBlock =
+      (void *)((char *)blockToSplit + sizeof(MemoryBlock) + size);
 
   if (globHead->tailBlock == blockToSplit) {
     globHead->tailBlock = newBlock;
@@ -56,22 +55,21 @@ void *SplitBlock(Block *blockToSplit, size_t size) {
   newBlock->size = spaceRemainigAfterSplit;
   newBlock->isFree = true;
 
-  return (void *)((char *)blockToSplit + sizeof(Block));
+  return (void *)((char *)blockToSplit + sizeof(MemoryBlock));
 }
 
-void *myMalloc(size_t size) {
-  int noOfPagesToGrow = ((size + sizeof(Block)) % PAGE_SIZE) == 0
-                            ? ((size + sizeof(Block)) / PAGE_SIZE)
-                            : 1 + ((size + sizeof(Block)) / PAGE_SIZE);
+void *AllocateMemory(size_t size) {
+  int pagesNeeded = ((size + sizeof(MemoryBlock)) % PAGE_SIZE) == 0
+                        ? ((size + sizeof(MemoryBlock)) / PAGE_SIZE)
+                        : 1 + ((size + sizeof(MemoryBlock)) / PAGE_SIZE);
   if (globHead == NULL) {
-    void *heapStart = sbrk(noOfPagesToGrow * PAGE_SIZE);
-    globHead = (GloabalHeader *)heapStart;
-    globHead->pages = noOfPagesToGrow;
+    void *heapStart = sbrk(pagesNeeded * PAGE_SIZE);
+    globHead = (HeapManager *)heapStart;
+    globHead->pages = pagesNeeded;
     globHead->heapStart = heapStart;
-    globHead->heapEnd =
-        (void *)((char *)heapStart + (noOfPagesToGrow * PAGE_SIZE));
-    Block *StartingBlock =
-        (void *)((char *)globHead->heapStart + sizeof(GloabalHeader));
+    globHead->heapEnd = (void *)((char *)heapStart + (pagesNeeded * PAGE_SIZE));
+    MemoryBlock *StartingBlock =
+        (void *)((char *)globHead->heapStart + sizeof(HeapManager));
     assert(StartingBlock != NULL);
     globHead->startBlock = StartingBlock;
     StartingBlock->prev = NULL;
@@ -79,43 +77,44 @@ void *myMalloc(size_t size) {
     StartingBlock->isFree = false;
     StartingBlock->size = size;
     globHead->tailBlock = StartingBlock;
-    return (void *)((char *)StartingBlock + sizeof(Block));
+    return (void *)((char *)StartingBlock + sizeof(MemoryBlock));
   }
 
-  Block *tempblock =
-      (Block *)((char *)globHead->heapStart + sizeof(GloabalHeader));
+  MemoryBlock *tempblock =
+      (MemoryBlock *)((char *)globHead->heapStart + sizeof(HeapManager));
 
-  Block *bestBlock = NULL;
+  MemoryBlock *bestFitBlock = NULL;
   while (tempblock != NULL) {
     if ((tempblock->isFree == true) && (tempblock->size >= size) &&
-        (bestBlock != NULL ? tempblock->size < bestBlock->size : true)) {
-      bestBlock = tempblock;
+        (bestFitBlock != NULL ? tempblock->size < bestFitBlock->size : true)) {
+      bestFitBlock = tempblock;
     }
     tempblock = tempblock->next;
   }
 
-  if (bestBlock != NULL && bestBlock->isFree != false) {
-    bool canBlockSplit = isSplitable(bestBlock, size);
+  if (bestFitBlock != NULL && bestFitBlock->isFree != false) {
+    bool canBlockSplit = isSplitable(bestFitBlock, size);
     if (canBlockSplit) {
-      return SplitBlock(bestBlock, size);
+      return SplitMemoryBlock(bestFitBlock, size);
     } else {
-      bestBlock->isFree = false;
-      return (void *)((char *)bestBlock + sizeof(Block));
+      bestFitBlock->isFree = false;
+      return (void *)((char *)bestFitBlock + sizeof(MemoryBlock));
     }
   }
   tempblock = globHead->tailBlock;
   void *currentBlockEnd =
-      (void *)((char *)tempblock + tempblock->size + sizeof(Block));
-  void *newBlockEnd = (void *)((char *)currentBlockEnd + sizeof(Block) + size);
+      (void *)((char *)tempblock + tempblock->size + sizeof(MemoryBlock));
+  void *newBlockEnd =
+      (void *)((char *)currentBlockEnd + sizeof(MemoryBlock) + size);
 
   if ((char *)globHead->heapEnd < (char *)newBlockEnd) {
-    sbrk(noOfPagesToGrow * PAGE_SIZE);
+    sbrk(pagesNeeded * PAGE_SIZE);
     globHead->heapEnd = sbrk(0);
-    globHead->pages += noOfPagesToGrow;
+    globHead->pages += pagesNeeded;
   }
 
-  Block *newBlock =
-      (Block *)((char *)tempblock + tempblock->size + sizeof(Block));
+  MemoryBlock *newBlock = (MemoryBlock *)((char *)tempblock + tempblock->size +
+                                          sizeof(MemoryBlock));
   assert(newBlock != NULL);
   newBlock->prev = tempblock;
   newBlock->next = NULL;
@@ -123,15 +122,51 @@ void *myMalloc(size_t size) {
   newBlock->size = size;
   tempblock->next = newBlock;
   globHead->tailBlock = newBlock;
-  return (void *)((char *)newBlock + sizeof(Block));
+  return (void *)((char *)newBlock + sizeof(MemoryBlock));
 }
 
-void myFree(void *toFree) {
+bool CanCoalease(MemoryBlock *BlockToCheck) {
+  if (BlockToCheck->next != NULL && BlockToCheck->next->isFree == true)
+    return true;
+
+  if (BlockToCheck->prev != NULL && BlockToCheck->prev->isFree == true)
+    return true;
+
+  return false;
+}
+
+void CoaleaseAdjacentBlocks(MemoryBlock *blockToMerge) {
+  blockToMerge->isFree = true;
+  while (blockToMerge != globHead->startBlock &&
+         blockToMerge->prev->isFree == true) {
+    // this loop will bring us to the prev block which is free until we hit a
+    // block that is USED
+    blockToMerge = blockToMerge->prev;
+  }
+  while (blockToMerge->next != NULL && blockToMerge->next->isFree == true) {
+    MemoryBlock *toRemove = blockToMerge->next;
+
+    blockToMerge->size += sizeof(MemoryBlock) + toRemove->size;
+
+    if (toRemove == globHead->tailBlock) {
+      globHead->tailBlock = blockToMerge;
+      blockToMerge->next = NULL;
+      break;
+    }
+
+    blockToMerge->next = toRemove->next;
+    if (toRemove->next != NULL) {
+      toRemove->next->prev = blockToMerge;
+    }
+  }
+}
+
+void FreeMemory(void *toFree) {
   if (toFree == NULL || toFree < globHead->heapStart ||
       toFree > globHead->heapEnd)
     return;
 
-  Block *toFreeBlock = (void *)((char *)toFree - sizeof(Block));
+  MemoryBlock *toFreeBlock = (void *)((char *)toFree - sizeof(MemoryBlock));
 
   if (toFreeBlock->isFree == true)
     return;
@@ -139,13 +174,17 @@ void myFree(void *toFree) {
   if (toFreeBlock == NULL)
     return;
 
-  toFreeBlock->isFree = true;
+  if (CanCoalease(toFreeBlock)) {
+    CoaleaseAdjacentBlocks(toFreeBlock);
+  } else {
+    toFreeBlock->isFree = true;
+  }
 }
 
 void printHeap() {
-  printf("GloabalHeader [No of Pages : %d]\n", globHead->pages);
+  printf("HeapManager [No of Pages : %d]\n", globHead->pages);
 
-  Block *tempblock = globHead->startBlock;
+  MemoryBlock *tempblock = globHead->startBlock;
   int count = 1;
   while (tempblock != NULL) {
     if (tempblock->isFree == true) {
@@ -165,14 +204,111 @@ void printHeap() {
 }
 
 int main() {
-  int *a = myMalloc(100);
-  int *b = myMalloc(50);
-  char *h = myMalloc(100000);
-  myFree(b);
+
+  printf("=========== CUSTOM MALLOC TEST SUITE ===========\n\n");
+
+  // -------------------------------------------------
+  // TEST 1 : Basic Allocations
+  // -------------------------------------------------
+  printf("TEST 1 : Basic Allocations\n");
+
+  int *a = AllocateMemory(100);
+  int *b = AllocateMemory(50);
+  int *c = AllocateMemory(80);
+
   printHeap();
 
-  printf("\nCustom Malloc By Jayraje Shinde");
+  // Expected:
+  // USED -> USED -> USED
+
+  printf("\n===============================================\n\n");
+
+  // -------------------------------------------------
+  // TEST 2 : Free Middle Block
+  // -------------------------------------------------
+  printf("TEST 2 : Free Middle Block\n");
+
+  FreeMemory(b);
+
+  printHeap();
+
+  // Expected:
+  // USED -> FREE -> USED
+
+  printf("\n===============================================\n\n");
+
+  // -------------------------------------------------
+  // TEST 3 : Adjacent Coalescing
+  // -------------------------------------------------
+  printf("TEST 3 : Adjacent Coalescing\n");
+
+  FreeMemory(c);
+
+  printHeap();
+
+  // Expected:
+  // USED -> FREE (merged b + c)
+
+  printf("\n===============================================\n\n");
+
+  // -------------------------------------------------
+  // TEST 4 : Head Coalescing
+  // -------------------------------------------------
+  printf("TEST 4 : Head Coalescing\n");
+
+  FreeMemory(a);
+
+  printHeap();
+
+  // Expected:
+  // Single FREE block
+
+  printf("\n===============================================\n\n");
+
+  // -------------------------------------------------
+  // TEST 5 : Split Reuse
+  // -------------------------------------------------
+  printf("TEST 5 : Split Reuse\n");
+
+  int *d = AllocateMemory(120);
+
+  printHeap();
+
+  // Expected:
+  // USED block of 120
+  // Remaining FREE split block
+
+  printf("\n===============================================\n\n");
+
+  // -------------------------------------------------
+  // TEST 6 : New Allocation
+  // -------------------------------------------------
+  printf("TEST 6 : Additional Allocations\n");
+
+  int *e = AllocateMemory(60);
+  int *f = AllocateMemory(40);
+
+  printHeap();
+
+  printf("\n===============================================\n\n");
+
+  // -------------------------------------------------
+  // TEST 7 : Full Heap Coalescing
+  // -------------------------------------------------
+  printf("TEST 7 : Full Heap Coalescing\n");
+
+  FreeMemory(d);
+  FreeMemory(e);
+  FreeMemory(f);
+
+  printHeap();
+
+  // Expected:
+  // Entire heap merged into one FREE block
+
+  printf("\n===============================================\n\n");
+
+  printf("Custom Malloc By Jayraje Shinde\n");
+
   return 0;
 }
-
-// Create block mering function and done
